@@ -40,7 +40,7 @@ async function initBrowser() {
 
 async function blockUnwantedResources(page) {
   await page.route("**/*", (route) => {
-    const blockedTypes = new Set(["image", "stylesheet", "font", "media"]);
+    const blockedTypes = new Set(["image", "font", "media"]);
     const blockedDomains = ["google-analytics.com", "doubleclick.net"];
     const url = route.request().url();
 
@@ -74,51 +74,95 @@ async function playerPriceValue(data, Grade) {
       if (playerRestrictions.includes(Number(player.id))) {
         continue;
       } else {
-        for (let grade of grades) {
-          const { id } = player;
-          const url = `https://fconline.nexon.com/DataCenter/PlayerInfo?spid=${id}&n1Strong=${grade}`;
-          const page = await context.newPage();
-          await blockUnwantedResources(page);
+        const { id } = player;
+        const url = `https://fconline.nexon.com/DataCenter/PlayerInfo?spid=${id}&n1Strong=1`;
+        const page = await context.newPage();
+        await blockUnwantedResources(page);
 
-          try {
-            console.log(`🌍 Navigating to ${url}`);
-            await page.goto(url, { waitUntil: "domcontentloaded" });
+        try {
+          console.log(`🌍 Navigating to ${url}`);
+          await page.goto(url, { waitUntil: "domcontentloaded" });
 
-            await page.waitForFunction(
-              () => {
+          await page.waitForFunction(
+            () => {
+              const element = document.querySelector(".txt strong");
+              return (
+                element &&
+                element.getAttribute("title") &&
+                element.getAttribute("title").trim() !== ""
+              );
+            },
+            { timeout: 5000 }
+          );
+
+          for (let grade of grades) {
+            try {
+              await page.waitForSelector(".en_selector_wrap .en_wrap", {
+                timeout: 5000,
+              });
+              await page.click(".en_selector_wrap .en_wrap");
+
+              await page.waitForSelector(
+                `.selector_item.en_level${grade}:visible`,
+                { timeout: 5000 }
+              );
+
+              await page.waitForTimeout(300);
+
+              const elements = await page.$$(`.selector_item.en_level${grade}`);
+              for (const el of elements) {
+                const visible = await el.isVisible();
+                if (visible) {
+                  await el.click();
+                  break;
+                }
+              }
+
+              // 일부 DOM 갱신 대기
+              await page.waitForTimeout(450);
+
+              // 가격 텍스트가 로드될 때까지 대기
+              await page.waitForFunction(
+                () => {
+                  const element = document.querySelector(".txt strong");
+                  return element && element.textContent.trim() !== "";
+                },
+                { timeout: 5000 }
+              );
+
+              const datacenterTitle = await page.evaluate(() => {
                 const element = document.querySelector(".txt strong");
-                return (
-                  element &&
-                  element.getAttribute("title") &&
-                  element.getAttribute("title").trim() !== ""
+                return element ? element.textContent.trim() : null;
+              });
+
+              if (!datacenterTitle) {
+                console.log(
+                  `⚠️ ID ${id}, Grade ${grade} → 텍스트 없음 (건너뜀)`
                 );
-              },
-              { timeout: 80000 }
-            );
+                continue;
+              }
 
-            let datacenterTitle = await page.evaluate(() => {
-              const element = document.querySelector(".txt strong").textContent;
-              return element;
-            });
+              console.log(`✔ ID ${id} / Grade ${grade} → ${datacenterTitle}`);
 
-            results.push({
-              id: id,
-              prices: { grade, price: datacenterTitle },
-            });
-
-            console.log(`✔ ID ${id} / Grade ${grade} → ${datacenterTitle}`);
-          } catch (err) {
-            console.error(
-              `❌ Error for ID ${id}, Grade ${grade}:`,
-              err.message
-            );
-            results.push({
-              id: id,
-              prices: { grade, price: "Error" },
-            });
-          } finally {
-            await page.close();
+              results.push({
+                id,
+                prices: { grade, price: datacenterTitle },
+              });
+            } catch (err) {
+              console.log(
+                `⛔ ID ${id}, Grade ${grade} → 오류 발생, 건너뜀 (${err.message})`
+              );
+              continue;
+            }
           }
+        } catch (err) {
+          console.error(`❌ Error for ID ${id}, Grade ${grades}:`, err.message);
+          // results.push({
+          // id: id,
+          // prices: { grade, price: "Error" },
+          // });
+        } finally {
+          await page.close();
         }
       }
     }
@@ -243,7 +287,6 @@ const playerSearch = async (selectedSeason = "", minOvr = 0) => {
 
   return playerReports;
 };
-
 async function main() {
   try {
     await dbConnect();
